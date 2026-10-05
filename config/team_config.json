@@ -1,0 +1,8 @@
+{
+  "team_id": "team-a",
+  "stale_after_s": 3.0,
+  "ros_domain_id": 21,
+  "listen_host": "0.0.0.0",
+  "port": 8080,
+  "notes": "Devices on the same trusted LAN can open http://ROVER_IP:8080. Keep ROS_DOMAIN_ID identical on the rover and gateway."
+}

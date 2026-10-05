@@ -1,0 +1,2 @@
+# Ground station web runtime uses Python standard library only.
+# ROS 2 dependencies (rclpy, nav_msgs, std_msgs) are provided by ROS 2 Humble on the rover/ground computer.
