@@ -123,6 +123,7 @@ def main() -> int:
 
     try:
         import rclpy
+        from rclpy.executors import ExternalShutdownException
         from rclpy.node import Node
         from sensor_msgs.msg import CompressedImage
         from std_msgs.msg import String
@@ -337,10 +338,13 @@ def main() -> int:
     node = Gateway()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.stop_discovery()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
     return 0
 
 

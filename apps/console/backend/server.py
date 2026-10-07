@@ -26,7 +26,10 @@ class GroundRequestHandler(BaseHTTPRequestHandler):
     server: GroundHTTPServer
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        print(f"[ground] {self.client_address[0]} {fmt % args}")
+        message = fmt % args
+        if '"GET /api/commands/pending?' in message:
+            return
+        print(f"[ground] {self.client_address[0]} {message}")
 
     def _json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")

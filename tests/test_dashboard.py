@@ -30,6 +30,10 @@ def test_dashboard_contains_only_connected_rover_controls():
         assert f'data-page-panel="{page}"' in html
     assert "#0b1118" not in css
     assert "--green:#2f6d55" in css
+    assert "@media" not in css
+    assert "min-width:1180px" in css
+    assert 'id="menuButton"' not in html
+    assert 'id="sidebarBackdrop"' not in html
 
 
 def test_javascript_ids_and_lan_configuration_are_consistent():
@@ -47,3 +51,19 @@ def test_javascript_ids_and_lan_configuration_are_consistent():
     assert config["discovery_port"] == 38765
     assert config["agent_port"] == 38766
     assert "data-connect-rover" in javascript
+
+
+def test_repository_has_one_documented_startup_entry():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    entry = ROOT / "START_MARS_ROVER.py"
+    assert entry.is_file()
+    assert entry.stat().st_mode & 0o111
+    assert "./START_MARS_ROVER.py" in readme
+    for removed in (
+        "START_MARS_ROVER.sh",
+        "START_MARS_ROVER.bat",
+        "START_MARS_ROVER_LAN.bat",
+        "scripts/windows_launcher.py",
+    ):
+        assert not (ROOT / removed).exists()
+        assert removed not in readme

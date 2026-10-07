@@ -121,8 +121,6 @@ function renderPages() {
 
 function navigate(page) {
   activePage = pageMeta[page] ? page : 'devices';
-  $('#sidebar').classList.remove('open');
-  $('#sidebarBackdrop').classList.remove('show');
   renderPages();
 }
 
@@ -616,8 +614,6 @@ $('#refreshDevices').addEventListener('click', async () => {
   toast('已刷新局域网设备');
 });
 $('#disconnectRover').addEventListener('click', disconnectRover);
-$('#menuButton').addEventListener('click', () => { $('#sidebar').classList.add('open'); $('#sidebarBackdrop').classList.add('show'); });
-$('#sidebarBackdrop').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#sidebarBackdrop').classList.remove('show'); });
 $('#map2dButton').addEventListener('click', () => { mapMode = '2d'; localStorage.setItem('mapMode', mapMode); renderMapMode(); drawMap(); });
 $('#map3dButton').addEventListener('click', () => { mapMode = '3d'; localStorage.setItem('mapMode', mapMode); renderMapMode(); drawMap(); });
 $('#startSearch').addEventListener('click', () => {
