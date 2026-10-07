@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from mars_ground_station import GroundStationService
-from scripts.ros2_team_gateway import ros_topic_segment
+from scripts.ros2_team_gateway import normalize_console_url, ros_topic_segment
 
 
 def service(tmp_path: Path) -> GroundStationService:
@@ -153,11 +153,13 @@ def test_lan_announcement_discovers_and_connects_rover(tmp_path):
         "name": "实验小车",
         "hostname": "rover-one",
         "ros_domain_id": 21,
+        "agent_port": 38766,
         "capabilities": ["camera", "lidar"],
     }, "192.168.8.31")
     assert device["online"] is True
     assert device["ip_address"] == "192.168.8.31"
     assert device["capabilities"] == ["camera", "lidar"]
+    assert device["agent_port"] == 38766
     row = telemetry()
     row["_source_ip"] = "127.0.0.1"
     row["health"] = {"camera": "OK"}
@@ -192,3 +194,9 @@ def test_lan_announcement_is_team_scoped(tmp_path):
             "team_id": "red",
             "rover_id": "r1",
         }, "192.168.8.31")
+
+
+def test_console_callback_url_is_normalized_and_rejects_credentials():
+    assert normalize_console_url("http://192.168.8.10:8080/") == "http://192.168.8.10:8080"
+    with pytest.raises(ValueError, match="credentials"):
+        normalize_console_url("http://user:secret@192.168.8.10:8080")

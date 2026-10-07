@@ -169,6 +169,12 @@ class GroundStationService:
             for value in capabilities
             if str(value).strip()
         })[:24]
+        try:
+            announced_agent_port = int(payload.get("agent_port") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid agent_port") from exc
+        if announced_agent_port < 0 or announced_agent_port > 65535:
+            raise ValueError("invalid agent_port")
         with self._condition:
             previous = self.devices.get(rover_id)
             previous_ip = str(previous.get("ip_address") or "") if previous else ""
@@ -187,6 +193,7 @@ class GroundStationService:
                 "model": str(payload.get("model") or "ROS2 Rover")[:96],
                 "ros_domain_id": payload.get("ros_domain_id"),
                 "gateway_version": str(payload.get("gateway_version") or "1")[:32],
+                "agent_port": announced_agent_port or None,
                 "capabilities": sorted(known_capabilities | set(normalized_capabilities)),
                 "source": "lan-broadcast",
                 "first_seen_at": previous.get("first_seen_at", now) if previous else now,
@@ -203,6 +210,17 @@ class GroundStationService:
                 self._record_event("ROVER_DISCOVERED_ON_LAN", rover_id=rover_id, payload={"ip_address": source_ip})
                 self._changed()
             return self._device_to_dict(row, now)
+
+    def device_for(self, rover_id: str) -> dict[str, Any]:
+        rover_id = str(rover_id or "").strip()
+        with self._lock:
+            row = self.devices.get(rover_id)
+            if row is None:
+                raise ValueError("rover is not visible on this LAN")
+            device = self._device_to_dict(row, time.time())
+            if not device["online"]:
+                raise ValueError("rover is offline; wait for its discovery heartbeat")
+            return device
 
     def connect_rover(self, rover_id: str) -> dict[str, Any]:
         rover_id = str(rover_id or "").strip()

@@ -130,6 +130,7 @@ export ROS_DOMAIN_ID=22
 {
   "protocol": "hitl-rover-discovery-v1",
   "gateway_version": "2.1",
+  "agent_port": 38766,
   "team_id": "team-a",
   "rover_id": "rover-01",
   "name": "rover-01",
@@ -139,4 +140,4 @@ export ROS_DOMAIN_ID=22
 }
 ```
 
-默认目的端口为 UDP `38765`，多播组为 `239.255.73.84`。平台仍会把正常到达的 `fleet_state` 作为发现信号，因此广播不可用时数据链不会失效。
+默认目的端口为 UDP `38765`，多播组为 `239.255.73.84`。网关的连接代理默认监听 TCP `38766`；平台选择设备时通过它自动配置回传地址。平台仍会把正常到达的 `fleet_state` 作为发现信号，因此广播不可用时数据链不会失效。

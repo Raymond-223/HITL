@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import mimetypes
+import socket
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -41,6 +44,44 @@ class GroundRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("JSON object required")
         return payload
+
+    def _activate_rover_link(self, device: dict[str, Any]) -> dict[str, Any] | None:
+        agent_port = int(device.get("agent_port") or 0)
+        if not agent_port:
+            return None
+        if agent_port < 1 or agent_port > 65535:
+            raise ValueError("rover advertised an invalid link-agent port")
+        address_text = str(device.get("ip_address") or "").strip()
+        try:
+            address = ipaddress.ip_address(address_text)
+        except ValueError as exc:
+            raise ValueError("rover advertised an invalid LAN address") from exc
+        if not (address.is_private or address.is_loopback or address.is_link_local):
+            raise ValueError("rover link agent must use a private LAN address")
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+            route.connect((address_text, agent_port))
+            console_address = str(route.getsockname()[0])
+        console_port = int(self.server.server_address[1])
+        console_url = f"http://{console_address}:{console_port}"
+        payload = json.dumps({
+            "team_id": self.server.service.team_id,
+            "rover_id": device["rover_id"],
+            "console_url": console_url,
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://{address_text}:{agent_port}/connect",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=2.0) as response:  # noqa: S310 - discovered private LAN agent
+                result = json.loads(response.read().decode("utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"rover link handshake failed: {exc}") from exc
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise ValueError("rover link agent rejected the connection")
+        return {"agent": f"{address_text}:{agent_port}", "console_url": console_url}
 
     def _static(self, relative: str) -> None:
         target = (self.server.frontend_dir / relative).resolve()
@@ -147,7 +188,12 @@ class GroundRequestHandler(BaseHTTPRequestHandler):
                 action = str(body.get("action") or "connect").strip().lower()
                 rover_id = str(body.get("rover_id") or "").strip()
                 if action == "connect":
-                    self._json({"ok": True, "result": self.server.service.connect_rover(rover_id)})
+                    device = self.server.service.device_for(rover_id)
+                    link = self._activate_rover_link(device)
+                    result = self.server.service.connect_rover(rover_id)
+                    if link is not None:
+                        result["link"] = link
+                    self._json({"ok": True, "result": result})
                 elif action == "disconnect":
                     self.server.service.disconnect_rover(rover_id or None)
                     self._json({"ok": True, "result": {"connected": False}})

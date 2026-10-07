@@ -29,8 +29,8 @@
       ▼
 同一局域网中的 Ground Gateway
       ├── UDP 38765 多播/广播心跳（自动发现）
-      │
-      └── HTTP（可与 Web 平台同机或分机）
+      ├── TCP 38766 连接握手（选择平台回传地址）
+      └── HTTP 遥测与指令（可与 Web 平台同机或分机）
       ▼
 Earth Ground Station Web UI
       │
@@ -45,7 +45,7 @@ START_MARS_ROVER.bat
 
 平台默认监听 `0.0.0.0:8080`。启动窗口会同时打印本机地址和局域网地址；手机、平板或另一台电脑可打开 `http://平台电脑IP:8080`。
 
-打开平台后先进入“设备连接”。在线小车会像 Wi-Fi 列表一样显示名称、地址、能力和遥测状态，点击“连接”后进入运行总览。发现心跳使用 UDP `38765`，Web 页面使用 TCP `8080`；系统防火墙需要允许这两个端口在专用局域网内通信。
+打开平台后先进入“设备连接”。在线小车会像 Wi-Fi 列表一样显示名称、地址、能力和遥测状态，点击“连接”后，平台通过 TCP `38766` 告诉网关把数据回传到当前平台，再进入运行总览。发现心跳使用 UDP `38765`，Web 页面使用 TCP `8080`；系统防火墙需要允许这三个端口在专用局域网内通信。
 
 Linux/ROS2 工作站可同时启动 Web 服务和 DDS 网关：
 
@@ -80,6 +80,7 @@ config/team_config.json
   "device_stale_after_s": 7.0,
   "ros_domain_id": 21,
   "discovery_port": 38765,
+  "agent_port": 38766,
   "listen_host": "0.0.0.0",
   "port": 8080
 }
@@ -109,10 +110,11 @@ export ROS_DOMAIN_ID=21
 python3 scripts/ros2_team_gateway.py \
   --team-id team-a \
   --console http://平台电脑IP:8080 \
-  --discovery-port 38765
+  --discovery-port 38765 \
+  --agent-port 38766
 ```
 
-两台电脑需要能通过局域网互相访问 TCP 8080，并允许 UDP 38765 多播/广播；小车与 ROS2 网关必须使用相同 `ROS_DOMAIN_ID`，并允许局域网 UDP/DDS 通信。即使 UDP 广播受限，平台收到第一条遥测后仍会把该小车加入设备列表。
+两台电脑需要能通过局域网互相访问 TCP 8080、TCP 38766，并允许 UDP 38765 多播/广播；小车与 ROS2 网关必须使用相同 `ROS_DOMAIN_ID`，并允许局域网 UDP/DDS 通信。`--console` 只是启动时的默认地址，用户在设备页连接小车后，网关会自动切换到当前平台地址。即使 UDP 广播受限，平台收到第一条遥测后仍会把该小车加入设备列表。
 
 ## 4. 实体车接入
 

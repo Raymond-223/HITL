@@ -45,4 +45,5 @@ def test_javascript_ids_and_lan_configuration_are_consistent():
     assert config["listen_host"] == "0.0.0.0"
     assert config["port"] == 8080
     assert config["discovery_port"] == 38765
+    assert config["agent_port"] == 38766
     assert "data-connect-rover" in javascript

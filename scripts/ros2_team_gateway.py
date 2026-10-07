@@ -17,6 +17,8 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 
 def post_json(url: str, payload: dict) -> None:
@@ -44,6 +46,70 @@ def ros_topic_segment(value: str) -> str:
     return segment
 
 
+def normalize_console_url(value: str) -> str:
+    parsed = urllib.parse.urlsplit(str(value or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("console_url must be an HTTP URL")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("console_url must not contain credentials, query, or fragment")
+    normalized = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+    return normalized.rstrip("/")
+
+
+class RoverLinkHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, address: tuple[str, int], gateway: Any) -> None:
+        super().__init__(address, RoverLinkRequestHandler)
+        self.gateway = gateway
+
+
+class RoverLinkRequestHandler(BaseHTTPRequestHandler):
+    server: RoverLinkHTTPServer
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+    def _json(self, payload: dict[str, Any], status: int = 200) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path != "/health":
+            self._json({"ok": False, "error": "not found"}, 404)
+            return
+        self._json({
+            "ok": True,
+            "team_id": self.server.gateway.team,
+            "rovers": self.server.gateway.visible_rover_ids(),
+            "console_url": self.server.gateway.current_console(),
+        })
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != "/connect":
+            self._json({"ok": False, "error": "not found"}, 404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0 or length > 16_384:
+                raise ValueError("invalid request size")
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON object required")
+            result = self.server.gateway.connect_console(
+                str(payload.get("team_id") or ""),
+                str(payload.get("rover_id") or ""),
+                str(payload.get("console_url") or ""),
+            )
+            self._json({"ok": True, "result": result})
+        except (ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
+            self._json({"ok": False, "error": str(exc)}, 400)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="ROS2 team broadcast <-> local MARS ground station")
     parser.add_argument("--team-id", required=True)
@@ -51,6 +117,8 @@ def main() -> int:
     parser.add_argument("--command-poll-s", type=float, default=0.25)
     parser.add_argument("--discovery-port", type=int, default=38765)
     parser.add_argument("--announce-interval-s", type=float, default=2.0)
+    parser.add_argument("--agent-host", default="0.0.0.0")
+    parser.add_argument("--agent-port", type=int, default=38766)
     args = parser.parse_args()
 
     try:
@@ -61,7 +129,7 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"ROS 2 Humble Python environment required: {exc}")
 
-    base = args.console.rstrip("/")
+    base = normalize_console_url(args.console)
     team = args.team_id.strip()
     topic_team = ros_topic_segment(team)
     prefix = f"/team/{topic_team}"
@@ -70,6 +138,8 @@ def main() -> int:
         def __init__(self) -> None:
             super().__init__(f"mars_ground_gateway_{topic_team}")
             self.lock = threading.Lock()
+            self.team = team
+            self.console_base = base
             self.create_subscription(String, f"{prefix}/fleet_state", self.on_state, 50)
             self.create_subscription(String, f"{prefix}/resource_discovery", self.on_discovery, 50)
             self.create_subscription(String, f"{prefix}/event", self.on_event, 50)
@@ -79,6 +149,18 @@ def main() -> int:
             self.command_pub = self.create_publisher(String, f"{prefix}/operator_directive", 50)
             self.outbox: dict[str, dict] = {}
             self.visible_rovers: dict[str, tuple[dict, float]] = {}
+            self.link_server: RoverLinkHTTPServer | None = None
+            self.link_thread: threading.Thread | None = None
+            try:
+                self.link_server = RoverLinkHTTPServer((args.agent_host, args.agent_port), self)
+                self.link_thread = threading.Thread(
+                    target=self.link_server.serve_forever,
+                    name="rover-link-agent",
+                    daemon=True,
+                )
+                self.link_thread.start()
+            except OSError as exc:
+                self.get_logger().warning(f"rover link agent unavailable: {exc}")
             self.discovery_stop = threading.Event()
             self.discovery_thread = threading.Thread(
                 target=self.announce_rovers,
@@ -89,6 +171,32 @@ def main() -> int:
             self.create_timer(max(0.1, args.command_poll_s), self.pull_commands)
             self.get_logger().info(f"listening to {prefix} on current ROS_DOMAIN_ID")
             self.get_logger().info(f"announcing visible rovers on UDP {args.discovery_port}")
+            if self.link_server is not None:
+                self.get_logger().info(f"rover link agent listening on {args.agent_host}:{args.agent_port}")
+
+        def current_console(self) -> str:
+            with self.lock:
+                return self.console_base
+
+        def visible_rover_ids(self) -> list[str]:
+            with self.lock:
+                return sorted(self.visible_rovers)
+
+        def connect_console(self, incoming_team: str, rover_id: str, console_url: str) -> dict[str, Any]:
+            if incoming_team.strip() != team:
+                raise ValueError("team_id mismatch")
+            rover_id = rover_id.strip()
+            with self.lock:
+                if rover_id not in self.visible_rovers:
+                    raise ValueError("rover is not currently visible to this gateway")
+            normalized = normalize_console_url(console_url)
+            health = get_json(normalized + "/api/health")
+            if not health.get("ready") or str(health.get("team_id") or "") != team:
+                raise ValueError("ground station health or team check failed")
+            with self.lock:
+                self.console_base = normalized
+            self.get_logger().info(f"connected {rover_id} to ground station {normalized}")
+            return {"rover_id": rover_id, "console_url": normalized}
 
         def _decode(self, msg: String) -> dict | None:
             try:
@@ -103,7 +211,7 @@ def main() -> int:
             try:
                 outgoing = dict(payload)
                 outgoing["team_id"] = team
-                post_json(base + endpoint, outgoing)
+                post_json(self.current_console() + endpoint, outgoing)
             except Exception as exc:
                 self.get_logger().warning(f"forward {endpoint} failed: {type(exc).__name__}: {exc}")
 
@@ -154,6 +262,7 @@ def main() -> int:
                         announcement = {
                             "protocol": "hitl-rover-discovery-v1",
                             "gateway_version": "2.1",
+                            "agent_port": args.agent_port if self.link_server is not None else None,
                             "team_id": team,
                             "rover_id": rover_id,
                             "name": str(state.get("rover_name") or rover_id),
@@ -175,6 +284,11 @@ def main() -> int:
         def stop_discovery(self) -> None:
             self.discovery_stop.set()
             self.discovery_thread.join(timeout=2.5)
+            if self.link_server is not None:
+                self.link_server.shutdown()
+                self.link_server.server_close()
+            if self.link_thread is not None:
+                self.link_thread.join(timeout=2.5)
 
         def on_discovery(self, msg: String) -> None:
             self._forward("/api/discovery", msg)
@@ -194,12 +308,12 @@ def main() -> int:
                 return
             query = urllib.parse.urlencode({"team_id": team, "rover_id": rover_id})
             try:
-                post_jpeg(base + "/api/camera/frame?" + query, bytes(msg.data))
+                post_jpeg(self.current_console() + "/api/camera/frame?" + query, bytes(msg.data))
             except Exception as exc:
                 self.get_logger().warning(f"forward camera failed: {type(exc).__name__}: {exc}")
 
         def pull_commands(self) -> None:
-            url = base + "/api/commands/pending?" + urllib.parse.urlencode({"team_id": team})
+            url = self.current_console() + "/api/commands/pending?" + urllib.parse.urlencode({"team_id": team})
             try:
                 commands = get_json(url).get("commands") or []
             except Exception:

@@ -243,6 +243,7 @@ function renderDiagnostics() {
   const device = selectedDevice();
   $('#detailRoverName').textContent = device?.name || device?.rover_id || '—';
   $('#detailRoverIp').textContent = device?.ip_address || '—';
+  $('#detailAgent').textContent = device?.agent_port ? `${device.ip_address}:${device.agent_port}` : '遥测直连';
   $('#detailRosDomain').textContent = device?.ros_domain_id ?? '—';
   $('#detailSource').textContent = device?.source === 'lan-broadcast' ? '局域网自动发现' : device?.source || '—';
   $('#detailLatency').textContent = device?.telemetry_age_s == null ? '—' : ageText(device.telemetry_age_s);

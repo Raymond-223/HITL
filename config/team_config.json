@@ -4,7 +4,8 @@
   "device_stale_after_s": 7.0,
   "ros_domain_id": 21,
   "discovery_port": 38765,
+  "agent_port": 38766,
   "listen_host": "0.0.0.0",
   "port": 8080,
-  "notes": "Devices on the same trusted LAN can open http://ROVER_IP:8080. Keep ROS_DOMAIN_ID identical on the rover and gateway."
+  "notes": "Open http://GROUND_STATION_IP:8080 on the trusted LAN. Allow TCP 8080/38766 and UDP 38765; keep ROS_DOMAIN_ID identical."
 }
