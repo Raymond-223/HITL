@@ -34,6 +34,15 @@ def lan_urls(port: int) -> list[str]:
                 addresses.add(address)
     except OSError:
         pass
+    for target in (("239.255.73.84", port), ("192.0.2.1", 9)):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+                route.connect(target)
+                address = str(route.getsockname()[0])
+                if address and not address.startswith("127."):
+                    addresses.add(address)
+        except OSError:
+            continue
     return [f"http://{address}:{port}" for address in sorted(addresses)]
 
 

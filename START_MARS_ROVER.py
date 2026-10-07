@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config" / "team_config.json"
+DIRECT_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def load_config() -> dict:
@@ -33,6 +34,17 @@ def lan_urls(port: int) -> list[str]:
                 addresses.add(address)
     except OSError:
         pass
+    # Hostname lookup commonly resolves only to 127.0.1.1 on Ubuntu.  A UDP
+    # connect selects the active interface without transmitting a packet.
+    for target in (("239.255.73.84", port), ("192.0.2.1", 9)):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+                route.connect(target)
+                address = str(route.getsockname()[0])
+                if address and not address.startswith("127."):
+                    addresses.add(address)
+        except OSError:
+            continue
     return [f"http://{address}:{port}" for address in sorted(addresses)]
 
 
@@ -42,7 +54,7 @@ def wait_for_server(port: int, process: subprocess.Popen) -> None:
         if process.poll() is not None:
             raise RuntimeError(f"platform server exited with code {process.returncode}")
         try:
-            with urllib.request.urlopen(url, timeout=0.25) as response:
+            with DIRECT_HTTP.open(url, timeout=0.25) as response:
                 if json.load(response).get("ready"):
                     return
         except (OSError, json.JSONDecodeError):

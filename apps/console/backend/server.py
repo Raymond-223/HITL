@@ -13,6 +13,12 @@ from typing import Any
 from mars_ground_station import GroundStationService
 
 
+# Platform-to-rover traffic must stay on the trusted LAN.  urllib otherwise
+# inherits HTTP(S)_PROXY from the desktop environment and can send a private
+# rover address to a corporate or development proxy, which breaks handshakes.
+DIRECT_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 class GroundHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -78,7 +84,7 @@ class GroundRequestHandler(BaseHTTPRequestHandler):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=2.0) as response:  # noqa: S310 - discovered private LAN agent
+            with DIRECT_HTTP.open(request, timeout=2.0) as response:  # noqa: S310 - validated private LAN agent
                 result = json.loads(response.read().decode("utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"rover link handshake failed: {exc}") from exc

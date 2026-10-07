@@ -21,21 +21,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
+# Never route rover telemetry, commands, or health checks through a desktop
+# HTTP proxy.  These endpoints are selected from the local rover network.
+DIRECT_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def post_json(url: str, payload: dict) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=1.0) as response:  # noqa: S310 - operator configured local endpoint
+    with DIRECT_HTTP.open(req, timeout=1.0) as response:  # noqa: S310 - operator configured local endpoint
         response.read()
 
 
 def post_jpeg(url: str, frame: bytes) -> None:
     req = urllib.request.Request(url, data=frame, headers={"Content-Type": "image/jpeg"}, method="POST")
-    with urllib.request.urlopen(req, timeout=2.0) as response:  # noqa: S310
+    with DIRECT_HTTP.open(req, timeout=2.0) as response:  # noqa: S310
         response.read()
 
 
 def get_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=1.0) as response:  # noqa: S310
+    with DIRECT_HTTP.open(url, timeout=1.0) as response:  # noqa: S310
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -125,6 +130,7 @@ def main() -> int:
         import rclpy
         from rclpy.executors import ExternalShutdownException
         from rclpy.node import Node
+        from rclpy._rclpy_pybind11 import RCLError
         from sensor_msgs.msg import CompressedImage
         from std_msgs.msg import String
     except Exception as exc:
@@ -314,6 +320,8 @@ def main() -> int:
                 self.get_logger().warning(f"forward camera failed: {type(exc).__name__}: {exc}")
 
         def pull_commands(self) -> None:
+            if not rclpy.ok():
+                return
             url = self.current_console() + "/api/commands/pending?" + urllib.parse.urlencode({"team_id": team})
             try:
                 commands = get_json(url).get("commands") or []
@@ -325,7 +333,11 @@ def main() -> int:
                     self.outbox[command_id] = command
             # The HTTP endpoint is destructive (pop). Keep commands locally
             # until at least one rover-side subscriber is visible in DDS.
-            if self.command_pub.get_subscription_count() < 1:
+            try:
+                subscriber_count = self.command_pub.get_subscription_count()
+            except RCLError:
+                return
+            if subscriber_count < 1:
                 return
             for command_id, command in list(self.outbox.items()):
                 out = String()
@@ -338,7 +350,7 @@ def main() -> int:
     node = Gateway()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException):
+    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
         pass
     finally:
         node.stop_discovery()
