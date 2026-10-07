@@ -18,6 +18,7 @@ class IdParser(HTMLParser):
 
 def test_dashboard_contains_only_connected_rover_controls():
     html = (ROOT / "apps/console/frontend/index.html").read_text(encoding="utf-8")
+    css = (ROOT / "apps/console/frontend/assets/style.css").read_text(encoding="utf-8")
     for element_id in (
         "mapCanvas", "map2dButton", "map3dButton", "cameraFrame", "startSearch",
         "pauseCommand", "resumeCommand", "returnCommand", "estopCommand", "healthGrid",
@@ -25,6 +26,10 @@ def test_dashboard_contains_only_connected_rover_controls():
         assert f'id="{element_id}"' in html
     for removed in ("实验记录", "模型对照", "附加参数 JSON", "信息边界"):
         assert removed not in html
+    for page in ("devices", "overview", "map", "perception", "mission", "diagnostics"):
+        assert f'data-page-panel="{page}"' in html
+    assert "#0b1118" not in css
+    assert "--green:#2f6d55" in css
 
 
 def test_javascript_ids_and_lan_configuration_are_consistent():
@@ -39,3 +44,5 @@ def test_javascript_ids_and_lan_configuration_are_consistent():
     config = json.loads((ROOT / "config/team_config.json").read_text(encoding="utf-8"))
     assert config["listen_host"] == "0.0.0.0"
     assert config["port"] == 8080
+    assert config["discovery_port"] == 38765
+    assert "data-connect-rover" in javascript

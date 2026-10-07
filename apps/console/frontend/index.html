@@ -3,97 +3,148 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0b1118">
+  <meta name="theme-color" content="#f5f6f2">
   <title>小车监督平台</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
   <div class="app-shell">
-    <header class="topbar">
+    <aside id="sidebar" class="sidebar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span></div>
-        <div><strong>小车监督平台</strong><small>ROVER CONTROL &amp; SUPERVISION</small></div>
+        <div><strong>行迹</strong><small>小车监督平台</small></div>
       </div>
-      <div class="topbar-right">
-        <label class="rover-picker"><span>监控车辆</span><select id="roverSelect" aria-label="选择监控车辆"><option value="">等待小车上线</option></select></label>
-        <div id="connectionState" class="connection waiting"><i></i><span>正在连接平台</span></div>
-        <time id="serverClock">--:--:--</time>
+      <nav class="main-nav" aria-label="主要页面">
+        <button class="nav-item active" data-page="devices"><span class="nav-icon devices-icon"></span><span>设备连接</span></button>
+        <button class="nav-item" data-page="overview"><span class="nav-icon overview-icon"></span><span>运行总览</span></button>
+        <button class="nav-item" data-page="map"><span class="nav-icon map-icon"></span><span>地图导航</span></button>
+        <button class="nav-item" data-page="perception"><span class="nav-icon eye-icon"></span><span>目标感知</span></button>
+        <button class="nav-item" data-page="mission"><span class="nav-icon mission-icon"></span><span>任务控制</span></button>
+        <button class="nav-item" data-page="diagnostics"><span class="nav-icon health-icon"></span><span>系统诊断</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="pulse-dot"></span>
+        <div><strong id="sidebarStatus">平台服务正常</strong><small id="sidebarAddress">局域网模式</small></div>
       </div>
-    </header>
+    </aside>
 
-    <main>
-      <section class="overview" aria-label="小车运行概览">
-        <article class="metric mission-metric"><div class="metric-icon state-icon" aria-hidden="true"></div><div><span>任务状态</span><strong id="modeValue">等待数据</strong><small id="missionValue">尚未连接小车</small></div></article>
-        <article class="metric"><div class="metric-icon speed-icon" aria-hidden="true"></div><div><span>当前速度</span><strong id="speedValue">—</strong><small id="turnValue">角速度 —</small></div></article>
-        <article class="metric"><div class="metric-icon battery-icon" aria-hidden="true"></div><div><span>电池电量</span><strong id="batteryValue">—</strong><small id="healthValue">设备状态未知</small></div></article>
-        <article class="metric"><div class="metric-icon target-icon" aria-hidden="true"></div><div><span>搜索目标</span><strong id="targetValue">未指定</strong><small id="targetCountValue">已发现 0 个目标</small></div></article>
-        <article class="metric"><div class="metric-icon pose-icon" aria-hidden="true"></div><div><span>实时位置</span><strong id="poseValue">—</strong><small id="headingValue">航向 —</small></div></article>
-        <article class="metric"><div class="metric-icon distance-icon" aria-hidden="true"></div><div><span>累计里程</span><strong id="distanceValue">—</strong><small id="ageValue">数据龄 —</small></div></article>
-      </section>
+    <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+    <div class="app-main">
+      <header class="topbar">
+        <div class="title-wrap">
+          <button id="menuButton" class="icon-button menu-button" aria-label="打开菜单">☰</button>
+          <div><span id="pageEyebrow" class="page-eyebrow">NETWORK</span><h1 id="pageTitle">设备连接</h1></div>
+        </div>
+        <div class="topbar-right">
+          <button id="activeRover" class="active-rover" data-page-link="devices"><span class="rover-glyph">R</span><span><small>当前小车</small><strong id="activeRoverName">尚未连接</strong></span></button>
+          <div id="connectionState" class="connection waiting"><i></i><span>平台连接中</span></div>
+          <time id="serverClock">--:--:--</time>
+        </div>
+      </header>
 
-      <section class="workspace">
-        <article class="panel map-panel">
-          <div class="panel-head">
-            <div><span class="eyebrow">SLAM / NAV2</span><h1>地图与运动轨迹</h1></div>
-            <div class="map-head-tools">
-              <div class="view-toggle" aria-label="地图视图"><button id="map2dButton" class="active">2D</button><button id="map3dButton">立体</button></div>
-              <div class="legend" aria-label="地图图例"><span><i class="legend-track"></i>实际轨迹</span><span><i class="legend-path"></i>规划路径</span><span><i class="legend-target"></i>识别目标</span></div>
+      <main class="content">
+        <section class="page active" data-page-panel="devices">
+          <div class="page-intro device-intro">
+            <div><span class="section-kicker">ROVER NETWORK</span><h2>选择附近的小车</h2><p>平台会自动显示同一局域网中正在广播的 ROS2 小车，就像选择 Wi-Fi 一样连接。</p></div>
+            <button id="refreshDevices" class="secondary-button"><span class="refresh-icon">↻</span>重新扫描</button>
+          </div>
+          <div class="discovery-strip">
+            <div class="radar-mini" aria-hidden="true"><i></i></div>
+            <div><strong>正在监听局域网</strong><span>UDP 发现服务会持续更新设备在线状态</span></div>
+            <span id="deviceCount" class="device-count">0 台在线</span>
+          </div>
+          <div id="deviceList" class="device-grid"><div class="device-empty"><div class="empty-orbit"></div><strong>正在寻找小车</strong><span>请确认小车和平台位于同一局域网，并已启动 ROS2 网关。</span></div></div>
+          <div class="two-column help-row">
+            <article class="card help-card"><span class="card-number">01</span><div><h3>小车端</h3><p>启动自主栈和 ROS2 网关，保持与平台相同的 team_id 和 ROS_DOMAIN_ID。</p></div></article>
+            <article class="card help-card"><span class="card-number">02</span><div><h3>平台端</h3><p>发现设备后点击“连接”。断线设备会保留在列表中并明确标记，不会误发控制指令。</p></div></article>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="overview">
+          <div class="page-intro"><div><span class="section-kicker">LIVE OVERVIEW</span><h2>运行总览</h2><p>集中查看已连接小车的任务、运动、供电和定位状态。</p></div></div>
+          <div class="metric-grid">
+            <article class="metric accent"><span>任务状态</span><strong id="modeValue">等待连接</strong><small id="missionValue">尚未连接小车</small></article>
+            <article class="metric"><span>当前速度</span><strong id="speedValue">—</strong><small id="turnValue">角速度 —</small></article>
+            <article class="metric"><span>电池电量</span><strong id="batteryValue">—</strong><small id="healthValue">设备状态未知</small></article>
+            <article class="metric"><span>搜索目标</span><strong id="targetValue">未指定</strong><small id="targetCountValue">已发现 0 个目标</small></article>
+            <article class="metric"><span>实时位置</span><strong id="poseValue">—</strong><small id="headingValue">航向 —</small></article>
+            <article class="metric"><span>累计里程</span><strong id="distanceValue">—</strong><small id="ageValue">数据龄 —</small></article>
+          </div>
+          <div class="overview-layout">
+            <article class="card status-card">
+              <div class="card-head"><div><span class="section-kicker">MISSION</span><h3>当前任务</h3></div><span id="overviewMissionBadge" class="status-pill muted">空闲</span></div>
+              <div class="status-hero"><div class="status-ring"><span id="statusRingValue">—</span></div><div><strong id="overviewMissionTitle">等待连接小车</strong><p id="overviewMissionText">连接后可查看自主探索、路径规划和避障状态。</p></div></div>
+              <button class="text-button" data-page-link="mission">打开任务控制 <span>→</span></button>
+            </article>
+            <article class="card activity-card">
+              <div class="card-head"><div><span class="section-kicker">ACTIVITY</span><h3>最近动态</h3></div><button class="text-button" data-page-link="diagnostics">系统诊断</button></div>
+              <div id="eventList" class="scroll-list"><div class="list-empty">暂无任务动态</div></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="map">
+          <div class="page-intro compact-intro">
+            <div><span class="section-kicker">SLAM &amp; NAVIGATION</span><h2>地图与路径规划</h2><p>查看占据栅格、实际轨迹、规划路线、识别目标和小车实时位置。</p></div>
+            <div class="view-toggle" aria-label="地图视图"><button id="map2dButton" class="active">2D 平面</button><button id="map3dButton">立体视图</button></div>
+          </div>
+          <article class="card map-card">
+            <div class="map-toolbar"><div class="legend"><span><i class="legend-track"></i>实际轨迹</span><span><i class="legend-path"></i>规划路径</span><span><i class="legend-target"></i>识别目标</span></div><span id="mapStatus" class="map-status">等待 /map</span></div>
+            <div class="map-stage">
+              <canvas id="mapCanvas"></canvas>
+              <div id="mapEmpty" class="empty-state"><div class="empty-radar" aria-hidden="true"></div><strong>等待地图数据</strong><span>连接小车并发布 SLAM 地图后自动显示</span></div>
+              <div class="map-compass" aria-hidden="true"><b>N</b><i></i></div>
             </div>
-          </div>
-          <div class="map-stage">
-            <canvas id="mapCanvas"></canvas>
-            <div id="mapEmpty" class="empty-state"><div class="empty-radar" aria-hidden="true"></div><strong>等待地图数据</strong><span>小车上线并发布 SLAM 地图后自动显示</span></div>
-            <div class="map-compass" aria-hidden="true"><b>N</b><i></i></div>
-          </div>
-          <footer class="panel-foot"><span id="mapStatus">等待 /map</span><span id="mapUpdated">立体模式基于 2D SLAM 栅格</span></footer>
-        </article>
-
-        <aside class="side-stack">
-          <article class="panel camera-panel">
-            <div class="panel-head compact"><div><span class="eyebrow">PERCEPTION</span><h2>目标识别画面</h2></div><span id="cameraState" class="mini-status waiting">等待画面</span></div>
-            <div class="camera-stage"><img id="cameraFrame" alt="小车目标识别实时画面"><div id="cameraEmpty" class="camera-empty"><span class="camera-symbol" aria-hidden="true"></span><strong>相机未上线</strong><small>识别框会直接叠加在画面中</small></div></div>
-            <footer class="panel-foot"><span id="cameraMeta">等待 /perception/debug_image</span></footer>
+            <footer class="card-foot"><span>立体视图根据二维占据栅格生成</span><span id="mapUpdated">尚未更新</span></footer>
           </article>
+        </section>
 
-          <article class="panel control-panel">
-            <div class="panel-head compact"><div><span class="eyebrow">MISSION CONTROL</span><h2>任务控制</h2></div><span id="commandQueue" class="queue-count">0 条待发</span></div>
-            <label class="target-input"><span>要寻找的目标</span><div><input id="targetClass" list="targetClasses" value="person" autocomplete="off" placeholder="输入目标类别"><button id="startSearch" class="primary">开始寻找</button></div></label>
+        <section class="page" data-page-panel="perception">
+          <div class="page-intro"><div><span class="section-kicker">PERCEPTION</span><h2>目标感知</h2><p>查看实时识别画面、目标类别、置信度和地图坐标。</p></div><span id="cameraState" class="status-pill muted">等待画面</span></div>
+          <div class="perception-layout">
+            <article class="card camera-card">
+              <div class="camera-stage"><img id="cameraFrame" alt="小车目标识别实时画面"><div id="cameraEmpty" class="camera-empty"><span class="camera-symbol" aria-hidden="true"></span><strong>相机未上线</strong><small>识别画面上线后将在这里显示</small></div></div>
+              <footer class="card-foot"><span id="cameraMeta">等待 /perception/debug_image</span></footer>
+            </article>
+            <article class="card target-card">
+              <div class="card-head"><div><span class="section-kicker">DETECTIONS</span><h3>已发现目标</h3></div><span id="targetBadge" class="count-badge">0</span></div>
+              <div id="targetList" class="scroll-list tall"><div class="list-empty">尚未发现目标</div></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="mission">
+          <div class="page-intro"><div><span class="section-kicker">MISSION CONTROL</span><h2>任务控制</h2><p>指定目标后，小车将自主探索、识别目标、规划路径并在行进中持续避障。</p></div><span id="commandQueue" class="queue-count">0 条待发</span></div>
+          <article class="card mission-builder">
+            <div class="mission-form">
+              <label><span>要寻找的目标</span><input id="targetClass" list="targetClasses" value="person" autocomplete="off" placeholder="例如 person、bottle"></label>
+              <button id="startSearch" class="primary-button">开始寻找目标</button>
+            </div>
             <datalist id="targetClasses"><option value="person"><option value="bottle"><option value="cup"><option value="chair"><option value="backpack"><option value="cell phone"><option value="book"><option value="suitcase"><option value="dog"><option value="cat"><option value="bicycle"><option value="car"><option value="potted plant"></datalist>
             <div class="quick-actions">
-              <button id="pauseCommand" data-action="HOLD"><i class="pause-symbol"></i>暂停</button>
-              <button id="resumeCommand" data-action="RESUME"><i class="play-symbol"></i>继续</button>
-              <button id="returnCommand" data-action="RETURN"><i class="home-symbol"></i>返航</button>
-              <button id="estopCommand" class="estop" data-action="EMERGENCY_STOP"><i></i>紧急停车</button>
+              <button id="pauseCommand" data-action="HOLD"><i class="pause-symbol"></i><span>暂停任务</span></button>
+              <button id="resumeCommand" data-action="RESUME"><i class="play-symbol"></i><span>继续任务</span></button>
+              <button id="returnCommand" data-action="RETURN"><i class="home-symbol"></i><span>返回起点</span></button>
+              <button id="estopCommand" class="estop" data-action="EMERGENCY_STOP"><i></i><span>紧急停车</span></button>
             </div>
-            <p id="commandFeedback" class="command-feedback">选择目标后，小车将自主探索、识别、规划路径并持续避障。</p>
+            <p id="commandFeedback" class="command-feedback">连接一辆在线小车后即可下发任务。</p>
           </article>
-        </aside>
-      </section>
+          <article class="card progress-card">
+            <div class="card-head"><div><span class="section-kicker">PROGRESS</span><h3>任务进度</h3></div><span id="missionBadge" class="status-pill muted">空闲</span></div>
+            <div id="missionSteps" class="mission-steps"><div data-stage="SEARCH"><i>1</i><span>接收任务</span></div><b></b><div data-stage="EXPLORE"><i>2</i><span>探索环境</span></div><b></b><div data-stage="TARGET_FOUND"><i>3</i><span>发现目标</span></div><b></b><div data-stage="NAVIGATE"><i>4</i><span>规划前往</span></div><b></b><div data-stage="DONE"><i>5</i><span>到达目标</span></div></div>
+            <div id="explorationDetail" class="status-strip">等待任务</div>
+          </article>
+        </section>
 
-      <section class="detail-grid">
-        <article class="panel mission-panel">
-          <div class="panel-head compact"><div><span class="eyebrow">MISSION PROGRESS</span><h2>任务进度</h2></div><span id="missionBadge" class="mini-status">空闲</span></div>
-          <div id="missionSteps" class="mission-steps"><div data-stage="SEARCH"><i>1</i><span>接收任务</span></div><b></b><div data-stage="EXPLORE"><i>2</i><span>探索环境</span></div><b></b><div data-stage="TARGET_FOUND"><i>3</i><span>发现目标</span></div><b></b><div data-stage="NAVIGATE"><i>4</i><span>规划前往</span></div><b></b><div data-stage="DONE"><i>5</i><span>到达目标</span></div></div>
-          <div id="explorationDetail" class="status-strip">等待任务</div>
-        </article>
-
-        <article class="panel health-panel">
-          <div class="panel-head compact"><div><span class="eyebrow">SYSTEM HEALTH</span><h2>设备与安全</h2></div><span id="overallHealth" class="mini-status waiting">未知</span></div>
-          <div id="healthGrid" class="health-grid"></div>
-          <div class="safety-line"><span>安全控制</span><strong id="safetyValue">等待状态</strong></div>
-        </article>
-
-        <article class="panel target-panel">
-          <div class="panel-head compact"><div><span class="eyebrow">DETECTIONS</span><h2>已发现目标</h2></div><span id="targetBadge" class="count-badge">0</span></div>
-          <div id="targetList" class="scroll-list"><div class="list-empty">尚未发现目标</div></div>
-        </article>
-
-        <article class="panel event-panel">
-          <div class="panel-head compact"><div><span class="eyebrow">ACTIVITY</span><h2>最近动态</h2></div></div>
-          <div id="eventList" class="scroll-list"><div class="list-empty">暂无任务动态</div></div>
-        </article>
-      </section>
-    </main>
+        <section class="page" data-page-panel="diagnostics">
+          <div class="page-intro"><div><span class="section-kicker">SYSTEM DIAGNOSTICS</span><h2>系统诊断</h2><p>检查传感器、数据延迟、网络地址和安全控制状态。</p></div><span id="overallHealth" class="status-pill muted">状态未知</span></div>
+          <div class="diagnostic-layout">
+            <article class="card"><div class="card-head"><div><span class="section-kicker">SENSORS</span><h3>设备健康</h3></div></div><div id="healthGrid" class="health-grid"></div><div class="safety-line"><span>安全控制</span><strong id="safetyValue">等待状态</strong></div></article>
+            <article class="card network-card"><div class="card-head"><div><span class="section-kicker">CONNECTION</span><h3>连接详情</h3></div><button id="disconnectRover" class="danger-text">断开连接</button></div><dl class="detail-list"><div><dt>小车名称</dt><dd id="detailRoverName">—</dd></div><div><dt>网络地址</dt><dd id="detailRoverIp">—</dd></div><div><dt>ROS Domain</dt><dd id="detailRosDomain">—</dd></div><div><dt>发现方式</dt><dd id="detailSource">—</dd></div><div><dt>遥测延迟</dt><dd id="detailLatency">—</dd></div></dl></article>
+          </div>
+        </section>
+      </main>
+    </div>
   </div>
   <div id="toast" class="toast" role="status"></div>
   <script src="/assets/app.js"></script>

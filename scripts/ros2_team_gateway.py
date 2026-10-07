@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import socket
 import threading
+import time
 import urllib.parse
 import urllib.request
 
@@ -46,6 +49,8 @@ def main() -> int:
     parser.add_argument("--team-id", required=True)
     parser.add_argument("--console", default="http://127.0.0.1:8080")
     parser.add_argument("--command-poll-s", type=float, default=0.25)
+    parser.add_argument("--discovery-port", type=int, default=38765)
+    parser.add_argument("--announce-interval-s", type=float, default=2.0)
     args = parser.parse_args()
 
     try:
@@ -73,21 +78,103 @@ def main() -> int:
             self.create_subscription(CompressedImage, f"{prefix}/camera/compressed", self.on_camera, 10)
             self.command_pub = self.create_publisher(String, f"{prefix}/operator_directive", 50)
             self.outbox: dict[str, dict] = {}
+            self.visible_rovers: dict[str, tuple[dict, float]] = {}
+            self.discovery_stop = threading.Event()
+            self.discovery_thread = threading.Thread(
+                target=self.announce_rovers,
+                name="rover-lan-announcer",
+                daemon=True,
+            )
+            self.discovery_thread.start()
             self.create_timer(max(0.1, args.command_poll_s), self.pull_commands)
             self.get_logger().info(f"listening to {prefix} on current ROS_DOMAIN_ID")
+            self.get_logger().info(f"announcing visible rovers on UDP {args.discovery_port}")
 
-        def _forward(self, endpoint: str, msg: String) -> None:
+        def _decode(self, msg: String) -> dict | None:
             try:
                 payload = json.loads(msg.data)
                 if not isinstance(payload, dict):
-                    return
-                payload["team_id"] = team
-                post_json(base + endpoint, payload)
+                    return None
+                return payload
+            except (json.JSONDecodeError, TypeError):
+                return None
+
+        def _forward_payload(self, endpoint: str, payload: dict) -> None:
+            try:
+                outgoing = dict(payload)
+                outgoing["team_id"] = team
+                post_json(base + endpoint, outgoing)
             except Exception as exc:
                 self.get_logger().warning(f"forward {endpoint} failed: {type(exc).__name__}: {exc}")
 
+        def _forward(self, endpoint: str, msg: String) -> None:
+            payload = self._decode(msg)
+            if payload is not None:
+                self._forward_payload(endpoint, payload)
+
         def on_state(self, msg: String) -> None:
-            self._forward("/api/telemetry", msg)
+            payload = self._decode(msg)
+            if payload is None:
+                return
+            rover_id = str(payload.get("rover_id") or "").strip()
+            if rover_id:
+                with self.lock:
+                    self.visible_rovers[rover_id] = (dict(payload), time.time())
+            self._forward_payload("/api/telemetry", payload)
+
+        def announce_rovers(self) -> None:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+            except OSError as exc:
+                self.get_logger().warning(f"LAN discovery disabled: {exc}")
+                return
+            targets = [
+                ("239.255.73.84", args.discovery_port),
+                ("255.255.255.255", args.discovery_port),
+                ("127.0.0.1", args.discovery_port),
+            ]
+            interval = max(0.5, float(args.announce_interval_s))
+            try:
+                while not self.discovery_stop.wait(interval):
+                    now = time.time()
+                    with self.lock:
+                        rows = list(self.visible_rovers.items())
+                        self.visible_rovers = {
+                            rover_id: row for rover_id, row in rows if now - row[1] <= 12.0
+                        }
+                        rows = list(self.visible_rovers.items())
+                    for rover_id, (state, _last_seen) in rows:
+                        health = state.get("health") if isinstance(state.get("health"), dict) else {}
+                        capabilities = [
+                            key for key in ("lidar", "camera", "depth", "imu", "localization")
+                            if str(health.get(key) or "").upper() not in {"", "UNKNOWN", "OFFLINE"}
+                        ]
+                        announcement = {
+                            "protocol": "hitl-rover-discovery-v1",
+                            "gateway_version": "2.1",
+                            "team_id": team,
+                            "rover_id": rover_id,
+                            "name": str(state.get("rover_name") or rover_id),
+                            "model": str(state.get("model") or "ROS2 Rover"),
+                            "hostname": socket.gethostname(),
+                            "ros_domain_id": os.environ.get("ROS_DOMAIN_ID", "0"),
+                            "capabilities": capabilities,
+                            "timestamp": now,
+                        }
+                        encoded = json.dumps(announcement, ensure_ascii=False).encode("utf-8")
+                        for target in targets:
+                            try:
+                                sock.sendto(encoded, target)
+                            except OSError:
+                                continue
+            finally:
+                sock.close()
+
+        def stop_discovery(self) -> None:
+            self.discovery_stop.set()
+            self.discovery_thread.join(timeout=2.5)
 
         def on_discovery(self, msg: String) -> None:
             self._forward("/api/discovery", msg)
@@ -137,6 +224,7 @@ def main() -> int:
     try:
         rclpy.spin(node)
     finally:
+        node.stop_discovery()
         node.destroy_node()
         rclpy.shutdown()
     return 0

@@ -23,11 +23,18 @@ class GroundStationService:
         "RETURN", "EMERGENCY_STOP",
     }
 
-    def __init__(self, workspace: Path, team_id: str = "team-a", stale_after_s: float = 3.0) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        team_id: str = "team-a",
+        stale_after_s: float = 3.0,
+        device_stale_after_s: float = 7.0,
+    ) -> None:
         self.workspace = Path(workspace)
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.team_id = team_id.strip() or "team-a"
         self.stale_after_s = max(0.5, float(stale_after_s))
+        self.device_stale_after_s = max(self.stale_after_s, float(device_stale_after_s))
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._revision = 0
@@ -41,6 +48,8 @@ class GroundStationService:
         self.maps: dict[str, dict[str, Any]] = {}
         self.paths: dict[str, dict[str, Any]] = {}
         self.camera_frames: dict[str, tuple[bytes, float]] = {}
+        self.devices: dict[str, dict[str, Any]] = {}
+        self.connected_rover_id: str | None = None
 
     def _assert_team(self, payload: dict[str, Any]) -> None:
         incoming = str(payload.get("team_id") or "").strip()
@@ -118,8 +127,125 @@ class GroundStationService:
             existing.source_timestamp = self._number(payload.get("timestamp"), default=now)
             existing.received_at = now
             existing.message_count += 1
+            source_ip = str(payload.get("_source_ip") or "").strip()
+            device = self.devices.setdefault(rover_id, {
+                "rover_id": rover_id,
+                "name": str(payload.get("rover_name") or rover_id),
+                "team_id": self.team_id,
+                "first_seen_at": now,
+                "source": "telemetry",
+                "capabilities": [],
+            })
+            device["last_seen_at"] = now
+            device["telemetry_seen_at"] = now
+            if source_ip and (
+                not device.get("ip_address")
+                or not source_ip.startswith("127.")
+            ):
+                device["ip_address"] = source_ip
+            health = payload.get("health") if isinstance(payload.get("health"), dict) else {}
+            device["capabilities"] = sorted(set(device.get("capabilities") or []) | {
+                capability
+                for capability in ("lidar", "camera", "depth", "imu", "localization")
+                if str(health.get(capability) or "").upper() not in {"", "UNKNOWN", "OFFLINE"}
+            })
             self._changed()
             return existing.to_dict(now, self.stale_after_s)
+
+    def ingest_network_announcement(self, payload: dict[str, Any], source_ip: str) -> dict[str, Any]:
+        """Register a rover gateway heartbeat received from the trusted LAN."""
+        self._assert_team(payload)
+        if str(payload.get("protocol") or "") != "hitl-rover-discovery-v1":
+            raise ValueError("unsupported discovery protocol")
+        rover_id = str(payload.get("rover_id") or "").strip()
+        if not rover_id or len(rover_id) > 96:
+            raise ValueError("invalid rover_id")
+        now = time.time()
+        capabilities = payload.get("capabilities")
+        if not isinstance(capabilities, list):
+            capabilities = []
+        normalized_capabilities = sorted({
+            str(value).strip().lower()
+            for value in capabilities
+            if str(value).strip()
+        })[:24]
+        with self._condition:
+            previous = self.devices.get(rover_id)
+            previous_ip = str(previous.get("ip_address") or "") if previous else ""
+            preferred_ip = (
+                previous_ip
+                if source_ip.startswith("127.") and previous_ip and not previous_ip.startswith("127.")
+                else source_ip
+            )
+            known_capabilities = set(previous.get("capabilities") or []) if previous else set()
+            row = {
+                "rover_id": rover_id,
+                "name": str(payload.get("name") or rover_id)[:96],
+                "team_id": self.team_id,
+                "ip_address": preferred_ip,
+                "hostname": str(payload.get("hostname") or "")[:128],
+                "model": str(payload.get("model") or "ROS2 Rover")[:96],
+                "ros_domain_id": payload.get("ros_domain_id"),
+                "gateway_version": str(payload.get("gateway_version") or "1")[:32],
+                "capabilities": sorted(known_capabilities | set(normalized_capabilities)),
+                "source": "lan-broadcast",
+                "first_seen_at": previous.get("first_seen_at", now) if previous else now,
+                "last_seen_at": now,
+                "telemetry_seen_at": previous.get("telemetry_seen_at") if previous else None,
+            }
+            material = {key: value for key, value in row.items() if key != "last_seen_at"}
+            previous_material = (
+                {key: value for key, value in previous.items() if key != "last_seen_at"}
+                if previous else None
+            )
+            self.devices[rover_id] = row
+            if material != previous_material:
+                self._record_event("ROVER_DISCOVERED_ON_LAN", rover_id=rover_id, payload={"ip_address": source_ip})
+                self._changed()
+            return self._device_to_dict(row, now)
+
+    def connect_rover(self, rover_id: str) -> dict[str, Any]:
+        rover_id = str(rover_id or "").strip()
+        now = time.time()
+        with self._condition:
+            row = self.devices.get(rover_id)
+            if row is None:
+                raise ValueError("rover is not visible on this LAN")
+            device = self._device_to_dict(row, now)
+            if not device["online"]:
+                raise ValueError("rover is offline; wait for its discovery heartbeat")
+            self.connected_rover_id = rover_id
+            self._record_event("OPERATOR_CONNECTED", rover_id=rover_id, payload={"ip_address": device.get("ip_address")})
+            self._changed()
+            return device
+
+    def disconnect_rover(self, rover_id: str | None = None) -> None:
+        with self._condition:
+            if rover_id and self.connected_rover_id != rover_id:
+                return
+            if self.connected_rover_id:
+                self._record_event("OPERATOR_DISCONNECTED", rover_id=self.connected_rover_id)
+                self.connected_rover_id = None
+                self._changed()
+
+    def _device_to_dict(self, row: dict[str, Any], now: float) -> dict[str, Any]:
+        result = dict(row)
+        age = max(0.0, now - float(row.get("last_seen_at") or 0.0))
+        telemetry_age = (
+            max(0.0, now - float(row["telemetry_seen_at"]))
+            if row.get("telemetry_seen_at") else None
+        )
+        rover = self.rovers.get(str(row.get("rover_id") or ""))
+        result.update({
+            "age_s": age,
+            "online": age <= self.device_stale_after_s,
+            "telemetry_online": bool(telemetry_age is not None and telemetry_age <= self.stale_after_s),
+            "telemetry_age_s": telemetry_age,
+            "connected": self.connected_rover_id == row.get("rover_id"),
+            "battery_pct": rover.battery_pct if rover else None,
+            "mode": rover.mode if rover else "DISCOVERED",
+        })
+        return result
 
     def ingest_map(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Store the latest real occupancy grid for one observed rover."""
@@ -325,6 +451,11 @@ class GroundStationService:
             "revision": self._revision,
             "server_time": now,
             "team_id": self.team_id,
+            "connected_rover_id": self.connected_rover_id,
+            "devices": [
+                self._device_to_dict(row, now)
+                for row in sorted(self.devices.values(), key=lambda value: str(value.get("rover_id") or ""))
+            ],
             "information_policy": {
                 "own_team_only": True,
                 "opponent_state_available": False,

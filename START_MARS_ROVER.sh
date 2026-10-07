@@ -14,12 +14,14 @@ print(config.get("team_id", "team-a"))
 print(config.get("ros_domain_id", 21))
 print(config.get("listen_host", "0.0.0.0"))
 print(config.get("port", 8080))
+print(config.get("discovery_port", 38765))
 PY
 )
 team_id="${station_config[0]}"
 export ROS_DOMAIN_ID="${station_config[1]}"
 listen_host="${station_config[2]}"
 station_port="${station_config[3]}"
+discovery_port="${station_config[4]}"
 export PYTHONPATH="$root_dir/src:$root_dir${PYTHONPATH:+:$PYTHONPATH}"
 
 python3 "$root_dir/apps/console/main.py" --host "$listen_host" --port "$station_port" &
@@ -61,4 +63,5 @@ for address in sorted(addresses):
 PY
 echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID, team_id=$team_id"
 python3 "$root_dir/scripts/ros2_team_gateway.py" \
-  --team-id "$team_id" --console "http://127.0.0.1:$station_port"
+  --team-id "$team_id" --console "http://127.0.0.1:$station_port" \
+  --discovery-port "$discovery_port"

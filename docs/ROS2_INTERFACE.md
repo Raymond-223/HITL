@@ -121,3 +121,22 @@ export ROS_DOMAIN_ID=22
 ```
 
 这可以在 DDS discovery 层避免地面站发现另一组车的 topic。`team_id` 过滤是额外保险。
+
+## LAN discovery heartbeat
+
+平台网关会根据 `fleet_state` 自动发送局域网发现心跳，不要求小车自主栈新增 UDP 代码：
+
+```json
+{
+  "protocol": "hitl-rover-discovery-v1",
+  "gateway_version": "2.1",
+  "team_id": "team-a",
+  "rover_id": "rover-01",
+  "name": "rover-01",
+  "hostname": "wheeltec",
+  "ros_domain_id": "21",
+  "capabilities": ["lidar", "camera", "imu", "localization"]
+}
+```
+
+默认目的端口为 UDP `38765`，多播组为 `239.255.73.84`。平台仍会把正常到达的 `fleet_state` 作为发现信号，因此广播不可用时数据链不会失效。

@@ -1,6 +1,6 @@
 # MARS Rover Earth Ground Station v2.0
 
-这是一个面向**真实实体小车、真实局域网和真实 ROS2 DDS** 的人在环监督平台。当前页面已经收敛为单车运行驾驶舱，集中显示任务、运动、感知、规划和安全状态。
+这是一个面向**真实实体小车、真实局域网和真实 ROS2 DDS** 的人在环监督平台。平台会自动发现同一局域网中的小车，操作员选择连接后，可分别在总览、地图、感知、任务和诊断页面查看运行状态。
 
 ## 系统边界
 
@@ -28,7 +28,9 @@
       │
       ▼
 同一局域网中的 Ground Gateway
-      │ HTTP（可与 Web 平台同机或分机）
+      ├── UDP 38765 多播/广播心跳（自动发现）
+      │
+      └── HTTP（可与 Web 平台同机或分机）
       ▼
 Earth Ground Station Web UI
       │
@@ -42,6 +44,8 @@ START_MARS_ROVER.bat
 ```
 
 平台默认监听 `0.0.0.0:8080`。启动窗口会同时打印本机地址和局域网地址；手机、平板或另一台电脑可打开 `http://平台电脑IP:8080`。
+
+打开平台后先进入“设备连接”。在线小车会像 Wi-Fi 列表一样显示名称、地址、能力和遥测状态，点击“连接”后进入运行总览。发现心跳使用 UDP `38765`，Web 页面使用 TCP `8080`；系统防火墙需要允许这两个端口在专用局域网内通信。
 
 Linux/ROS2 工作站可同时启动 Web 服务和 DDS 网关：
 
@@ -73,7 +77,9 @@ config/team_config.json
 {
   "team_id": "team-a",
   "stale_after_s": 3.0,
+  "device_stale_after_s": 7.0,
   "ros_domain_id": 21,
+  "discovery_port": 38765,
   "listen_host": "0.0.0.0",
   "port": 8080
 }
@@ -102,10 +108,11 @@ python3 apps/console/main.py --host 0.0.0.0 --port 8080
 export ROS_DOMAIN_ID=21
 python3 scripts/ros2_team_gateway.py \
   --team-id team-a \
-  --console http://平台电脑IP:8080
+  --console http://平台电脑IP:8080 \
+  --discovery-port 38765
 ```
 
-两台电脑需要能通过局域网互相访问 TCP 8080；小车与 ROS2 网关必须使用相同 `ROS_DOMAIN_ID`，并允许局域网 UDP/DDS 通信。
+两台电脑需要能通过局域网互相访问 TCP 8080，并允许 UDP 38765 多播/广播；小车与 ROS2 网关必须使用相同 `ROS_DOMAIN_ID`，并允许局域网 UDP/DDS 通信。即使 UDP 广播受限，平台收到第一条遥测后仍会把该小车加入设备列表。
 
 ## 4. 实体车接入
 

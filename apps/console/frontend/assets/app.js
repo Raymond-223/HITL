@@ -1,13 +1,19 @@
 const $ = (selector) => document.querySelector(selector);
 
-let state = {rovers: [], known_resources: [], events: [], trajectories: {}, maps: {}, paths: {}, camera_feeds: {}};
+let state = {devices: [], rovers: [], known_resources: [], events: [], trajectories: {}, maps: {}, paths: {}, camera_feeds: {}};
 let streamConnected = false;
 let selectedRoverId = localStorage.getItem('selectedRoverId') || '';
+let activePage = localStorage.getItem('activePage') || 'devices';
 let lastRevision = -1;
 let reconnectTimer = null;
 let cameraSignature = '';
 let mapMode = localStorage.getItem('mapMode') === '3d' ? '3d' : '2d';
 const mapCache = new Map();
+const pageMeta = {
+  devices: ['NETWORK', '设备连接'], overview: ['LIVE OVERVIEW', '运行总览'],
+  map: ['SLAM & NAVIGATION', '地图导航'], perception: ['PERCEPTION', '目标感知'],
+  mission: ['MISSION CONTROL', '任务控制'], diagnostics: ['SYSTEM', '系统诊断']
+};
 
 const modeLabels = {
   IDLE: '空闲待命', SEARCH: '接收任务', EXPLORE: '探索环境', TARGET_FOUND: '发现目标',
@@ -15,7 +21,8 @@ const modeLabels = {
   PAUSED: '已暂停', ERROR: '任务异常', UNKNOWN: '状态未知'
 };
 const eventLabels = {
-  ROVER_FIRST_SEEN: '小车已上线', OPERATOR_COMMAND: '操作指令已提交',
+  ROVER_FIRST_SEEN: '小车开始发送遥测', ROVER_DISCOVERED_ON_LAN: '发现局域网小车',
+  OPERATOR_CONNECTED: '操作员已连接', OPERATOR_DISCONNECTED: '操作员已断开', OPERATOR_COMMAND: '操作指令已提交',
   OPERATOR_DIRECTIVE_ACCEPTED: '小车已接收指令', OPERATOR_DIRECTIVE_REJECTED: '指令被拒绝',
   TARGET_FOUND: '发现指定目标', TARGET_NAVIGATION_STARTED: '开始前往目标', TARGET_REACHED: '已到达目标',
   RESOURCE_DISCOVERED: '发现目标', RESOURCE_UPDATED: '目标位置已更新', MISSION_COMPLETED: '探索任务完成',
@@ -53,10 +60,13 @@ async function post(url, body = {}) {
 }
 function selectedRover() {
   const rows = state.rovers || [];
-  return rows.find((row) => row.rover_id === selectedRoverId) || rows[0] || null;
+  return rows.find((row) => row.rover_id === selectedRoverId) || null;
+}
+function selectedDevice() {
+  return (state.devices || []).find((row) => row.rover_id === selectedRoverId) || null;
 }
 function selectedId() {
-  return selectedRover()?.rover_id || '';
+  return selectedRoverId;
 }
 function missionMode(rover) {
   return String(rover?.mode || 'UNKNOWN').trim().toUpperCase();
@@ -78,7 +88,9 @@ function normalizeSafety(raw) {
 }
 
 function render() {
-  renderRoverSelector();
+  if (!selectedRoverId && state.connected_rover_id) selectedRoverId = state.connected_rover_id;
+  renderPages();
+  renderDevices();
   renderConnection();
   renderOverview();
   renderMission();
@@ -89,6 +101,7 @@ function render() {
   renderMapMode();
   loadMap();
   updateControls();
+  renderDiagnostics();
 }
 
 function renderMapMode() {
@@ -96,32 +109,62 @@ function renderMapMode() {
   $('#map3dButton').classList.toggle('active', mapMode === '3d');
 }
 
-function renderRoverSelector() {
-  const select = $('#roverSelect');
-  const rows = state.rovers || [];
+function renderPages() {
+  if (!pageMeta[activePage]) activePage = 'devices';
+  document.querySelectorAll('[data-page-panel]').forEach((element) => element.classList.toggle('active', element.dataset.pagePanel === activePage));
+  document.querySelectorAll('[data-page]').forEach((element) => element.classList.toggle('active', element.dataset.page === activePage));
+  $('#pageEyebrow').textContent = pageMeta[activePage][0];
+  $('#pageTitle').textContent = pageMeta[activePage][1];
+  localStorage.setItem('activePage', activePage);
+  if (activePage === 'map') requestAnimationFrame(drawMap);
+}
+
+function navigate(page) {
+  activePage = pageMeta[page] ? page : 'devices';
+  $('#sidebar').classList.remove('open');
+  $('#sidebarBackdrop').classList.remove('show');
+  renderPages();
+}
+
+function renderDevices() {
+  const rows = state.devices || [];
+  const onlineCount = rows.filter((row) => row.online).length;
+  $('#deviceCount').textContent = `${onlineCount} 台在线`;
   if (!rows.length) {
-    select.innerHTML = '<option value="">等待小车上线</option>';
-    selectedRoverId = '';
+    $('#deviceList').innerHTML = '<div class="device-empty"><div class="empty-orbit"></div><strong>正在寻找小车</strong><span>请确认小车和平台位于同一局域网，并已启动 ROS2 网关。</span></div>';
     return;
   }
-  if (!rows.some((row) => row.rover_id === selectedRoverId)) selectedRoverId = rows[0].rover_id;
-  select.innerHTML = rows.map((row) => `<option value="${escapeHtml(row.rover_id)}">${escapeHtml(row.rover_id)}${row.online ? '' : '（离线）'}</option>`).join('');
-  select.value = selectedRoverId;
-  localStorage.setItem('selectedRoverId', selectedRoverId);
+  const capabilityLabels = {lidar: '激光雷达', camera: '相机', depth: '深度', imu: 'IMU', localization: '定位'};
+  $('#deviceList').innerHTML = rows.map((device) => {
+    const isCurrent = selectedRoverId === device.rover_id && state.connected_rover_id === device.rover_id;
+    const capabilities = (device.capabilities || []).map((value) => `<span>${escapeHtml(capabilityLabels[value] || value)}</span>`).join('') || '<span>等待能力信息</span>';
+    const buttonText = isCurrent ? '已连接' : device.online ? '连接' : '已离线';
+    return `<article class="device-card${isCurrent ? ' connected' : ''}${device.online ? '' : ' offline'}">
+      <div class="device-top"><div class="device-avatar">${escapeHtml(String(device.name || device.rover_id).slice(0, 1).toUpperCase())}</div><span class="online-label${device.online ? '' : ' offline'}">${device.online ? '在线' : '离线'}</span></div>
+      <h3>${escapeHtml(device.name || device.rover_id)}</h3><span class="device-subtitle">${escapeHtml(device.ip_address || '地址待确认')} · ${escapeHtml(device.model || 'ROS2 Rover')}</span>
+      <div class="capability-row">${capabilities}</div>
+      <div class="device-footer"><small>${device.telemetry_online ? `遥测 ${ageText(device.telemetry_age_s)}` : '等待遥测数据'}</small><button class="connect-button${isCurrent ? ' current' : ''}" data-connect-rover="${escapeHtml(device.rover_id)}" ${!device.online || isCurrent ? 'disabled' : ''}>${buttonText}</button></div>
+    </article>`;
+  }).join('');
 }
 
 function renderConnection() {
   const rover = selectedRover();
+  const device = selectedDevice();
   const element = $('#connectionState');
+  $('#activeRoverName').textContent = device?.name || selectedRoverId || '尚未连接';
   if (!streamConnected) {
     element.className = 'connection waiting';
     element.innerHTML = '<i></i><span>平台连接中断</span>';
-  } else if (!rover) {
+  } else if (!device || state.connected_rover_id !== selectedRoverId) {
     element.className = 'connection warning';
-    element.innerHTML = '<i></i><span>平台已连接，等待小车</span>';
-  } else if (!rover.online) {
+    element.innerHTML = '<i></i><span>等待选择小车</span>';
+  } else if (!device.online) {
     element.className = 'connection warning';
-    element.innerHTML = '<i></i><span>小车数据已超时</span>';
+    element.innerHTML = '<i></i><span>小车连接已中断</span>';
+  } else if (!rover?.online) {
+    element.className = 'connection warning';
+    element.innerHTML = '<i></i><span>已连接，等待遥测</span>';
   } else {
     element.className = 'connection live';
     element.innerHTML = '<i></i><span>小车实时在线</span>';
@@ -148,6 +191,12 @@ function renderOverview() {
   $('#ageValue').textContent = `数据龄 ${rover ? ageText(rover.age_s) : '—'}`;
   $('#commandQueue').textContent = `${Number(state.pending_command_count || 0)} 条待发`;
   $('#serverClock').textContent = new Date().toLocaleTimeString('zh-CN', {hour12: false});
+  const modeText = rover ? (modeLabels[mode] || mode) : '等待连接小车';
+  $('#overviewMissionTitle').textContent = modeText;
+  $('#overviewMissionText').textContent = rover?.mission || (rover ? '小车在线，尚未开始任务。' : '连接后可查看自主探索、路径规划和避障状态。');
+  $('#statusRingValue').textContent = rover ? (rover.online ? '在线' : '超时') : '—';
+  $('#overviewMissionBadge').textContent = rover ? (modeLabels[mode] || mode) : '空闲';
+  $('#overviewMissionBadge').className = `status-pill${!rover || !rover.online ? ' muted' : mode === 'ERROR' ? ' fault' : ''}`;
 }
 
 function renderMission() {
@@ -164,7 +213,7 @@ function renderMission() {
   });
   const badge = $('#missionBadge');
   badge.textContent = rover ? (modeLabels[mode] || mode) : '离线';
-  badge.className = `mini-status${mode === 'ERROR' ? ' fault' : (!rover || !rover.online ? ' waiting' : '')}`;
+  badge.className = `status-pill${mode === 'ERROR' ? ' fault' : (!rover || !rover.online ? ' muted' : '')}`;
   const exploration = rover?.health?.exploration;
   $('#explorationDetail').textContent = exploration && exploration !== 'IDLE'
     ? `探索器：${exploration}${currentTarget(rover) ? ` · 当前目标：${currentTarget(rover)}` : ''}`
@@ -184,10 +233,20 @@ function renderHealth() {
   const overall = String(health.overall || 'UNKNOWN').toUpperCase();
   const badge = $('#overallHealth');
   badge.textContent = overall === 'OK' ? '全部正常' : overall === 'FAULT' ? '存在异常' : '状态未知';
-  badge.className = `mini-status${overall === 'FAULT' ? ' fault' : overall === 'OK' ? '' : ' waiting'}`;
+  badge.className = `status-pill${overall === 'FAULT' ? ' fault' : overall === 'OK' ? '' : ' muted'}`;
   const safety = normalizeSafety(health.safety);
   $('#safetyValue').textContent = safety;
   $('#safetyValue').style.color = /STOP|FAULT|COLLISION|EMERGENCY|TIMEOUT/i.test(safety) ? 'var(--red)' : 'var(--green)';
+}
+
+function renderDiagnostics() {
+  const device = selectedDevice();
+  $('#detailRoverName').textContent = device?.name || device?.rover_id || '—';
+  $('#detailRoverIp').textContent = device?.ip_address || '—';
+  $('#detailRosDomain').textContent = device?.ros_domain_id ?? '—';
+  $('#detailSource').textContent = device?.source === 'lan-broadcast' ? '局域网自动发现' : device?.source || '—';
+  $('#detailLatency').textContent = device?.telemetry_age_s == null ? '—' : ageText(device.telemetry_age_s);
+  $('#disconnectRover').disabled = !selectedRoverId || state.connected_rover_id !== selectedRoverId;
 }
 
 function renderTargets() {
@@ -228,7 +287,7 @@ function renderCamera() {
     stage.classList.remove('has-frame');
     image.removeAttribute('src');
     badge.textContent = '等待画面';
-    badge.className = 'mini-status waiting';
+    badge.className = 'status-pill muted';
     $('#cameraMeta').textContent = '等待 /perception/debug_image';
     return;
   }
@@ -240,7 +299,7 @@ function renderCamera() {
   const fresh = Number(feed.age_s) <= 3;
   stage.classList.add('has-frame');
   badge.textContent = fresh ? '实时' : '画面超时';
-  badge.className = `mini-status${fresh ? '' : ' fault'}`;
+  badge.className = `status-pill${fresh ? '' : ' fault'}`;
   $('#cameraMeta').textContent = `${roverId} · 更新于 ${ageText(feed.age_s)} 前`;
 }
 
@@ -353,11 +412,11 @@ function drawMap3d(context, width, height, scene) {
     y: height * .68 + ((Number(x) - centerX) + (Number(y) - centerY)) * scale * .34 - Number(z) * scale
   });
   const gradient = context.createLinearGradient(0, 0, 0, height);
-  gradient.addColorStop(0, '#0a131c'); gradient.addColorStop(1, '#111f2a');
+  gradient.addColorStop(0, '#f6f7f3'); gradient.addColorStop(1, '#dfe7e1');
   context.fillStyle = gradient; context.fillRect(0, 0, width, height);
   const corners = [project(minX, minY), project(maxX, minY), project(maxX, maxY), project(minX, maxY)];
-  fillPolygon(context, corners, '#172832', '#355260');
-  context.strokeStyle = 'rgba(93,136,151,.16)'; context.lineWidth = 1;
+  fillPolygon(context, corners, '#e9eee9', '#a8b8ad');
+  context.strokeStyle = 'rgba(80,105,88,.16)'; context.lineWidth = 1;
   const divisions = 10;
   for (let index = 1; index < divisions; index += 1) {
     const x = minX + spanX * index / divisions;
@@ -369,9 +428,9 @@ function drawMap3d(context, width, height, scene) {
     const {x, y, size, height: blockHeight} = block;
     const base = [project(x, y), project(x + size, y), project(x + size, y + size), project(x, y + size)];
     const top = [project(x, y, blockHeight), project(x + size, y, blockHeight), project(x + size, y + size, blockHeight), project(x, y + size, blockHeight)];
-    fillPolygon(context, [base[1], base[2], top[2], top[1]], '#273b47');
-    fillPolygon(context, [base[2], base[3], top[3], top[2]], '#1d303b');
-    fillPolygon(context, top, '#49616c', 'rgba(138,174,187,.24)');
+    fillPolygon(context, [base[1], base[2], top[2], top[1]], '#7d8a81');
+    fillPolygon(context, [base[2], base[3], top[3], top[2]], '#69766e');
+    fillPolygon(context, top, '#a7b1aa', 'rgba(74,94,80,.25)');
   });
   const drawRaisedLine = (points, color, dash, z, lineWidth) => {
     if (points.length < 2) return;
@@ -379,19 +438,19 @@ function drawMap3d(context, width, height, scene) {
     points.forEach((point, index) => { const projected = project(point.x, point.y, z); index ? context.lineTo(projected.x, projected.y) : context.moveTo(projected.x, projected.y); });
     context.stroke(); context.restore();
   };
-  drawRaisedLine(path, '#3bd5e6', [7, 5], .10, 2.5);
-  drawRaisedLine(track, '#45db98', [], .07, 2.2);
+  drawRaisedLine(path, '#3f7e9d', [7, 5], .10, 2.5);
+  drawRaisedLine(track, '#2fa274', [], .07, 2.2);
   targets.forEach((target) => {
     const base = project(target.x, target.y, 0), top = project(target.x, target.y, .45);
-    context.strokeStyle = '#f1b84c'; context.lineWidth = 2; context.beginPath(); context.moveTo(base.x, base.y); context.lineTo(top.x, top.y); context.stroke();
-    fillPolygon(context, [{x: top.x, y: top.y - 6}, {x: top.x + 6, y: top.y}, {x: top.x, y: top.y + 6}, {x: top.x - 6, y: top.y}], '#f1b84c');
-    context.fillStyle = '#dbe9ef'; context.font = '600 10px system-ui'; context.fillText(String(target.resource_type || '目标'), top.x + 9, top.y + 3);
+    context.strokeStyle = '#d98038'; context.lineWidth = 2; context.beginPath(); context.moveTo(base.x, base.y); context.lineTo(top.x, top.y); context.stroke();
+    fillPolygon(context, [{x: top.x, y: top.y - 6}, {x: top.x + 6, y: top.y}, {x: top.x, y: top.y + 6}, {x: top.x - 6, y: top.y}], '#d98038');
+    context.fillStyle = '#27352c'; context.font = '600 10px system-ui'; context.fillText(String(target.resource_type || '目标'), top.x + 9, top.y + 3);
   });
   if (rover?.pose) {
     const point = project(rover.pose.x, rover.pose.y, .16);
-    context.save(); context.translate(point.x, point.y); context.rotate(-Number(rover.pose.yaw_deg || 0) * Math.PI / 180 - Math.PI / 4); context.fillStyle = '#31c7d8';
+    context.save(); context.translate(point.x, point.y); context.rotate(-Number(rover.pose.yaw_deg || 0) * Math.PI / 180 - Math.PI / 4); context.fillStyle = '#2f6d55';
     context.beginPath(); context.moveTo(10, 0); context.lineTo(-7, -6); context.lineTo(-4, 0); context.lineTo(-7, 6); context.closePath(); context.fill(); context.restore();
-    context.fillStyle = '#dbe9ef'; context.font = '600 10px system-ui'; context.fillText(rover.rover_id, point.x + 10, point.y - 9);
+    context.fillStyle = '#27352c'; context.font = '600 10px system-ui'; context.fillText(rover.rover_id, point.x + 10, point.y - 9);
   }
   $('#mapStatus').textContent = grid ? `立体占用图 · ${grid.width} × ${grid.height} · ${num(grid.resolution, 3, ' m/格')}` : '立体轨迹视图 · 等待 /map';
   $('#mapUpdated').textContent = grid ? `2D SLAM 立体化 · ${ageText(Date.now() / 1000 - Number(grid.received_at))} 前更新` : '数据源为 2D SLAM';
@@ -494,7 +553,7 @@ function drawMap() {
 
 function updateControls() {
   const rover = selectedRover();
-  const disabled = !rover || !rover.online;
+  const disabled = !rover || !rover.online || state.connected_rover_id !== rover.rover_id;
   ['startSearch', 'pauseCommand', 'resumeCommand', 'returnCommand', 'estopCommand'].forEach((id) => { $(`#${id}`).disabled = disabled; });
 }
 async function sendCommand(action, payload = {}, label = action) {
@@ -512,12 +571,52 @@ async function sendCommand(action, payload = {}, label = action) {
   }
 }
 
-$('#roverSelect').addEventListener('change', (event) => {
-  selectedRoverId = event.target.value;
-  localStorage.setItem('selectedRoverId', selectedRoverId);
-  cameraSignature = '';
-  render();
+async function connectRover(roverId) {
+  try {
+    await post('/api/connection', {action: 'connect', rover_id: roverId});
+    selectedRoverId = roverId;
+    localStorage.setItem('selectedRoverId', roverId);
+    cameraSignature = '';
+    toast(`已连接 ${roverId}`);
+    await fetchSnapshot();
+    navigate('overview');
+  } catch (error) {
+    toast(`连接失败：${error.message}`);
+  }
+}
+
+async function disconnectRover() {
+  if (!selectedRoverId) return;
+  try {
+    await post('/api/connection', {action: 'disconnect', rover_id: selectedRoverId});
+    selectedRoverId = '';
+    localStorage.removeItem('selectedRoverId');
+    cameraSignature = '';
+    await fetchSnapshot();
+    navigate('devices');
+    toast('已断开小车');
+  } catch (error) {
+    toast(`断开失败：${error.message}`);
+  }
+}
+
+document.querySelectorAll('[data-page], [data-page-link]').forEach((element) => {
+  element.addEventListener('click', () => navigate(element.dataset.page || element.dataset.pageLink));
 });
+$('#deviceList').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-connect-rover]');
+  if (button && !button.disabled) connectRover(button.dataset.connectRover);
+});
+$('#refreshDevices').addEventListener('click', async () => {
+  $('#refreshDevices').disabled = true;
+  $('#refreshDevices').querySelector('.refresh-icon').style.display = 'inline-block';
+  await fetchSnapshot();
+  setTimeout(() => { $('#refreshDevices').disabled = false; }, 500);
+  toast('已刷新局域网设备');
+});
+$('#disconnectRover').addEventListener('click', disconnectRover);
+$('#menuButton').addEventListener('click', () => { $('#sidebar').classList.add('open'); $('#sidebarBackdrop').classList.add('show'); });
+$('#sidebarBackdrop').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#sidebarBackdrop').classList.remove('show'); });
 $('#map2dButton').addEventListener('click', () => { mapMode = '2d'; localStorage.setItem('mapMode', mapMode); renderMapMode(); drawMap(); });
 $('#map3dButton').addEventListener('click', () => { mapMode = '3d'; localStorage.setItem('mapMode', mapMode); renderMapMode(); drawMap(); });
 $('#startSearch').addEventListener('click', () => {

@@ -142,3 +142,53 @@ def test_camera_frame_requires_observed_team_rover(tmp_path):
     frame = s.camera_frame("r1")
     assert frame is not None and frame[0] == jpeg
     assert "r1" in s.snapshot()["camera_feeds"]
+
+
+def test_lan_announcement_discovers_and_connects_rover(tmp_path):
+    s = service(tmp_path)
+    device = s.ingest_network_announcement({
+        "protocol": "hitl-rover-discovery-v1",
+        "team_id": "blue",
+        "rover_id": "r1",
+        "name": "实验小车",
+        "hostname": "rover-one",
+        "ros_domain_id": 21,
+        "capabilities": ["camera", "lidar"],
+    }, "192.168.8.31")
+    assert device["online"] is True
+    assert device["ip_address"] == "192.168.8.31"
+    assert device["capabilities"] == ["camera", "lidar"]
+    row = telemetry()
+    row["_source_ip"] = "127.0.0.1"
+    row["health"] = {"camera": "OK"}
+    s.ingest_telemetry(row)
+    merged = s.snapshot()["devices"][0]
+    assert merged["ip_address"] == "192.168.8.31"
+    assert merged["capabilities"] == ["camera", "lidar"]
+    connected = s.connect_rover("r1")
+    assert connected["rover_id"] == "r1"
+    assert s.snapshot()["connected_rover_id"] == "r1"
+    s.disconnect_rover("r1")
+    assert s.snapshot()["connected_rover_id"] is None
+
+
+def test_telemetry_also_registers_device_when_udp_is_unavailable(tmp_path):
+    s = service(tmp_path)
+    row = telemetry()
+    row["_source_ip"] = "10.0.0.22"
+    row["health"] = {"camera": "OK", "lidar": "OK"}
+    s.ingest_telemetry(row)
+    device = s.snapshot()["devices"][0]
+    assert device["rover_id"] == "r1"
+    assert device["ip_address"] == "10.0.0.22"
+    assert device["telemetry_online"] is True
+
+
+def test_lan_announcement_is_team_scoped(tmp_path):
+    s = service(tmp_path)
+    with pytest.raises(ValueError, match="team_id mismatch"):
+        s.ingest_network_announcement({
+            "protocol": "hitl-rover-discovery-v1",
+            "team_id": "red",
+            "rover_id": "r1",
+        }, "192.168.8.31")

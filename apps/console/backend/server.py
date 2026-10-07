@@ -69,6 +69,13 @@ class GroundRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/status":
             self._json(self.server.service.snapshot())
             return
+        if path == "/api/devices":
+            snapshot = self.server.service.snapshot()
+            self._json({
+                "devices": snapshot["devices"],
+                "connected_rover_id": snapshot["connected_rover_id"],
+            })
+            return
         if path.startswith("/api/map/"):
             rover_id = urllib.parse.unquote(path.removeprefix("/api/map/"))
             row = self.server.service.map_for(rover_id)
@@ -136,6 +143,19 @@ class GroundRequestHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
                 return
             body = self._read_json()
+            if parsed.path == "/api/connection":
+                action = str(body.get("action") or "connect").strip().lower()
+                rover_id = str(body.get("rover_id") or "").strip()
+                if action == "connect":
+                    self._json({"ok": True, "result": self.server.service.connect_rover(rover_id)})
+                elif action == "disconnect":
+                    self.server.service.disconnect_rover(rover_id or None)
+                    self._json({"ok": True, "result": {"connected": False}})
+                else:
+                    raise ValueError("connection action must be connect or disconnect")
+                return
+            if parsed.path == "/api/telemetry":
+                body["_source_ip"] = self.client_address[0]
             routes = {
                 "/api/telemetry": self.server.service.ingest_telemetry,
                 "/api/discovery": self.server.service.ingest_discovery,
